@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="../css/style.css">
+    <title>Agadê Bases</title>
+</head>
+<body>
+    <h1 class="title"><a href="index.html">Agadê Bases</a></h1>
+
+    <form action="" id="formulario">
+
+        <!--Formulário com os metadados p/ etl.bases-->
+        <div class="container-form1">
+
+            <label for="nome">nome:</label>
+            <input type="text" id="nome" required>
+
+            <label for="descricao">descricao:</label>
+            <textarea id="descricao" rows="5" cols="30" required></textarea>
+
+            <label for="tabela_destino">tabela_destino:</label>
+            <input type="text" id="tabela_destino" required>
+
+            <label for="fonte">fonte:</label>
+            <input type="text" id="fonte" required>
+
+            <label for="fonte_link">fonte_link:</label>
+            <input type="url" id="fonte_link" required>
+
+            <label for="fonte_api">fonte_api:</label>
+            <div class="campo-fonte-api">
+                <input
+                    type="text"
+                    id="fonte_api"
+                    name="fonte_api"
+                    value="https://dados.recife.pe.gov.br/"
+                >
+
+                <button type="button" id="btnListarPackages">
+                    Listar package's
+                </button>
+            </div>
+
+        </div>
+
+        <!--Caixa de busca-->
+        <div class="busca-package" style="display: none;">
+            <label for="input-busca-package">Buscar package:</label>
+            <input type="text" id="input-busca-package">
+        </div>
+
+        <div id="lista-package-resource" class="container-form2">
+            <!--Campo p/ a lista de package e resources id-->
+        </div>
+
+        <!--Submeter o formulário e os resource's id selecionados-->
+        <button type="submit" id="submit" class="container-form2">Criar bases e fontes</button>
+    </form>
+
+    <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+    <script src="https://code.jquery.com/ui/1.13.2/jquery-ui.min.js"></script>
+    <script src="../js/formulario.js"></script>
+</body>
+</html>
