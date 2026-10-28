@@ -12,7 +12,6 @@ $schema_dados = 'public';
 
 /**
  * Baixa o conteúdo de uma URL usando cURL.
- * Utilizado para buscar o JSON de metadados.
  */
 function baixarArquivo(string $url): string
 {
@@ -90,16 +89,18 @@ function criarDicionario(
 
         $id_base = (int) $id_base;
 
-        if (!is_string($url) || trim($url) === '') {
-            throw new Exception('A URL do JSON não foi informada.');
+        // A URL do JSON é opcional.
+        // Quando não houver JSON selecionado, a descrição padrão será utilizada.
+        if ($url !== null && !is_string($url)) {
+            throw new Exception('A URL do JSON é inválida.');
         }
 
-        $url = trim($url);
+        $url = is_string($url) ? trim($url) : '';
 
 
-        // 2. Buscar a tabela de destino da base
+        // 2. Buscar os dados da base
         $sql = "
-            SELECT tabela_destino
+            SELECT tabela_destino, fonte_api
             FROM {$schema_bases_fontes}.bases
             WHERE id_base = $1
         ";
@@ -123,12 +124,21 @@ function criarDicionario(
         }
 
         $tabela_destino = trim($base['tabela_destino'] ?? '');
+        $fonte_api = trim($base['fonte_api'] ?? '');
 
         if ($tabela_destino === '') {
             throw new Exception(
                 'A base não possui uma tabela de destino configurada.'
             );
         }
+
+        if ($fonte_api === '') {
+            throw new Exception(
+                'A base não possui uma URL de API do CKAN configurada.'
+            );
+        }
+
+        $fonte_api = rtrim($fonte_api, '/');
 
 
         // 3. Verificar se já existe um dicionário para essa base
@@ -159,30 +169,195 @@ function criarDicionario(
         }
 
 
-        // 4. Baixar o JSON e obter a descrição da tabela
-        $conteudo_json = baixarArquivo($url);
+        // 4. Obter a descrição da tabela.
+        // Se um JSON foi selecionado, tentar obter a descrição dele.
+        // Sem JSON, a criação continua usando a descrição padrão.
+        $descricao_tabela = '...';
 
-        $dados_json = json_decode($conteudo_json, true);
+        if ($url !== '') {
+            $conteudo_json = baixarArquivo($url);
+            $dados_json = json_decode($conteudo_json, true);
 
-        if (!is_array($dados_json)) {
+            if (!is_array($dados_json)) {
+                throw new Exception(
+                    'Não foi possível interpretar o JSON selecionado.'
+                );
+            }
+
+            $descricao_json =
+                $dados_json['metadados']['cabecalho']['descricao'] ?? '...';
+
+            if (
+                is_string($descricao_json) &&
+                trim($descricao_json) !== ''
+            ) {
+                $descricao_tabela = trim($descricao_json);
+            }
+        }
+
+
+        // 5. Buscar os resources cadastrados para essa base
+        $sql = "
+            SELECT nome, resource_id, url, delimitador
+            FROM {$schema_bases_fontes}.fontes
+            WHERE id_base = $1
+              AND resource_id IS NOT NULL
+              AND TRIM(resource_id) <> ''
+        ";
+
+        $resultado = pg_query_params(
+            $conn,
+            $sql,
+            [$id_base]
+        );
+
+        if ($resultado === false) {
             throw new Exception(
-                'Não foi possível interpretar o JSON selecionado.'
+                'Erro ao consultar os resources da base: ' .
+                pg_last_error($conn)
             );
         }
 
-        // A descrição da tabela vem do cabeçalho do JSON.
-        $descricao_tabela =
-            $dados_json['metadados']['cabecalho']['descricao'] ?? '...';
+        $resources = [];
+        $maior_ano = -1;
 
-        if (
-            !is_string($descricao_tabela) ||
-            trim($descricao_tabela) === ''
-        ) {
-            $descricao_tabela = '...';
+        while ($resource = pg_fetch_assoc($resultado)) {
+
+            $nome_resource = trim($resource['nome'] ?? '');
+            $url_resource = trim($resource['url'] ?? '');
+            $delimitador = trim($resource['delimitador'] ?? '');
+
+            if (
+                $nome_resource === '' ||
+                $url_resource === '' ||
+                trim($resource['resource_id']) === ''
+            ) {
+                continue;
+            }
+
+            /*
+             * Considerar resources CSV.
+             *
+             * Um resource é considerado CSV quando:
+             * - a URL contém uma extensão .csv; ou
+             * - existe um delimitador cadastrado para ele.
+             */
+            $url_sem_query = preg_split(
+                '/[?#]/',
+                $url_resource,
+                2
+            )[0];
+
+            $eh_csv =
+                preg_match('/\.csv$/i', $url_sem_query) === 1
+                || $delimitador !== '';
+
+            if (!$eh_csv) {
+                continue;
+            }
+
+            // Extrair o ano do nome, por exemplo: "IPTU - 2026".
+            if (
+                !preg_match(
+                    '/\b((?:19|20)\d{2})\b/',
+                    $nome_resource,
+                    $correspondencia
+                )
+            ) {
+                continue;
+            }
+
+            $ano = (int) $correspondencia[1];
+
+            if ($ano > $maior_ano) {
+                $maior_ano = $ano;
+                $resources = [$resource];
+            } elseif ($ano === $maior_ano) {
+                $resources[] = $resource;
+            }
+        }
+
+        if (count($resources) === 0) {
+            throw new Exception(
+                'Nenhum resource CSV com ano identificado no nome ' .
+                'foi encontrado para essa base.'
+            );
+        }
+
+        if (count($resources) > 1) {
+            throw new Exception(
+                'Existe mais de um resource CSV com o ano mais recente ' .
+                'para essa base. Verifique os nomes dos resources.'
+            );
+        }
+
+        $resource_mais_recente = $resources[0];
+
+        $resource_id = trim(
+            $resource_mais_recente['resource_id']
+        );
+
+
+        // 6. Consultar os campos do resource mais recente na API do CKAN
+        $url_api = $fonte_api
+            . '/api/3/action/datastore_search?resource_id='
+            . rawurlencode($resource_id)
+            . '&limit=0';
+
+        $conteudo_api = baixarArquivo($url_api);
+
+        $dados_api = json_decode($conteudo_api, true);
+
+        if (!is_array($dados_api)) {
+            throw new Exception(
+                'A API do CKAN retornou uma resposta JSON inválida.'
+            );
+        }
+
+        if (($dados_api['success'] ?? false) !== true) {
+            $mensagem_api =
+                $dados_api['error']['message']
+                ?? 'Erro não especificado pela API do CKAN.';
+
+            throw new Exception(
+                'A consulta à API do CKAN falhou: ' . $mensagem_api
+            );
+        }
+
+        $campos_api = $dados_api['result']['fields'] ?? null;
+
+        if (!is_array($campos_api)) {
+            throw new Exception(
+                'A resposta da API do CKAN não contém os campos esperados.'
+            );
+        }
+
+        $nomes_campos_api = [];
+
+        foreach ($campos_api as $campo) {
+
+            if (
+                !isset($campo['id']) ||
+                !is_string($campo['id']) ||
+                trim($campo['id']) === ''
+            ) {
+                throw new Exception(
+                    'A API do CKAN retornou um campo sem nome válido.'
+                );
+            }
+
+            // Preservar o nome original retornado pela API.
+            $nomes_campos_api[] = $campo['id'];
+        }
+
+        if (count($nomes_campos_api) === 0) {
+            throw new Exception(
+                'Nenhum campo foi retornado pela API do CKAN.'
+            );
         }
 
 
-        // 5. Buscar as colunas da tabela de destino em public
+        // 7. Buscar as colunas reais da tabela de destino em public
         $sql = "
             SELECT column_name
             FROM information_schema.columns
@@ -204,20 +379,13 @@ function criarDicionario(
             );
         }
 
-        $colunas_dicionario = [];
+        $nomes_colunas_sql = [];
 
         while ($coluna = pg_fetch_assoc($resultado)) {
-
-            $nome_sql = $coluna['column_name'];
-
-            $colunas_dicionario[] = [
-                'nome' => $nome_sql,
-                'descricao' => '...',
-                'nome_sql' => $nome_sql
-            ];
+            $nomes_colunas_sql[] = $coluna['column_name'];
         }
 
-        if (count($colunas_dicionario) === 0) {
+        if (count($nomes_colunas_sql) === 0) {
             throw new Exception(
                 "Nenhuma coluna foi encontrada na tabela " .
                 "{$schema_dados}.{$tabela_destino}."
@@ -225,7 +393,33 @@ function criarDicionario(
         }
 
 
-        // 6. Iniciar a transação
+        // 8. Verificar se os campos correspondem em quantidade
+        if (count($nomes_campos_api) !== count($nomes_colunas_sql)) {
+            throw new Exception(
+                'A quantidade de campos retornados pela API do CKAN (' .
+                count($nomes_campos_api) .
+                ') é diferente da quantidade de colunas da tabela em ' .
+                $schema_dados . ' (' .
+                count($nomes_colunas_sql) .
+                '). O dicionário não foi criado para evitar associações incorretas.'
+            );
+        }
+
+
+        // 9. Associar os nomes da API aos nomes SQL pela posição
+        $colunas_dicionario = [];
+
+        foreach ($nomes_campos_api as $indice => $nome_api) {
+
+            $colunas_dicionario[] = [
+                'nome' => $nome_api,
+                'descricao' => '...',
+                'nome_sql' => $nomes_colunas_sql[$indice]
+            ];
+        }
+
+
+        // 10. Iniciar a transação
         $resultado = pg_query($conn, 'BEGIN');
 
         if ($resultado === false) {
@@ -238,8 +432,7 @@ function criarDicionario(
         $transacao_iniciada = true;
 
 
-        // 7. Inserir o dicionário da tabela
-        // A descrição utilizada é a obtida do JSON.
+        // 11. Inserir o dicionário da tabela
         $sql = "
             INSERT INTO {$schema_dicionario}.tabelas
                 (nome, descricao, id_base)
@@ -276,9 +469,7 @@ function criarDicionario(
         $id_tabela = $tabela['id_tabela'];
 
 
-        // 8. Inserir as colunas do dicionário
-        // nome e nome_sql recebem o nome real da coluna.
-        // A descrição das colunas recebe sempre '...'.
+        // 12. Inserir as colunas do dicionário
         $sql = "
             INSERT INTO {$schema_dicionario}.colunas
                 (nome, descricao, nome_sql, id_tabela)
@@ -309,7 +500,7 @@ function criarDicionario(
         }
 
 
-        // 9. Confirmar a transação
+        // 13. Confirmar a transação
         $resultado = pg_query($conn, 'COMMIT');
 
         if ($resultado === false) {
@@ -322,12 +513,15 @@ function criarDicionario(
         $transacao_iniciada = false;
 
 
-        // 10. Retornar sucesso
+        // 14. Retornar sucesso
         echo json_encode([
             'sucesso' => true,
             'mensagem' => 'Dicionário criado com sucesso.',
             'id_tabela' => $id_tabela,
             'tabela_destino' => $tabela_destino,
+            'resource_utilizado' => $resource_mais_recente['nome'],
+            'resource_id' => $resource_id,
+            'ano_resource' => $maior_ano,
             'quantidade_colunas' => count($colunas_dicionario)
         ], JSON_UNESCAPED_UNICODE);
 

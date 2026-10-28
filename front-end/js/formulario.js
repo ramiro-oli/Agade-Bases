@@ -61,7 +61,7 @@ function carregarPackages() {
     // mensagem temporária enquanto carrega os packages
     lista_package_resource.html("<p>Carregando...</p>");
 
-    // envia requisição para o php
+    // envia a requisição para o php
     $.post(
         // envia a ação a ser feita e a url digitada
         "../../back-end/php/script.php",
@@ -259,6 +259,7 @@ function carregarResources(package_id, painel, url) {
                     checkboxes.length > 0 &&
                     checkboxes.length ===
                     checkboxes.filter(":checked").length;
+
                 // variações do botão
                 botao.text(
                     todosMarcados
@@ -267,10 +268,9 @@ function carregarResources(package_id, painel, url) {
                 );
             }
 
+            // O JSON é opcional: o dicionário pode ser criado usando apenas a API do CKAN.
             function atualizarBotaoDicionario() {
-                const algumSelecionado =
-                    painel.find("input[name='resource_dicionario']:checked").length > 0;
-                botao_dicionario.prop("disabled", !algumSelecionado);
+                botao_dicionario.prop("disabled", false);
             }
 
             // função que faz o botão fazer o que faz e mudar a cada clique
@@ -305,23 +305,25 @@ function carregarResources(package_id, painel, url) {
                 }
             );
 
-            
             botao_dicionario.on("click", function() {
                 const selecionado =
                     painel.find("input[name='resource_dicionario']:checked");
 
-                if (selecionado.length !== 1) {
-                    alert("Selecione um JSON para criar o dicionário.");
+                // Se houver um JSON marcado, envia sua URL; caso contrário, envia vazio.
+                const url_dicionario = selecionado.length
+                    ? selecionado.data("url")
+                    : "";
+
+                if (!id_base) {
+                    alert("Salve a base antes de criar o dicionário.");
                     return;
                 }
-
-                const resource = selecionado;
 
                 $.post(
                     "../../back-end/php/dicionario.php",
                     {
                         id_base: id_base,
-                        url: resource.data("url"),
+                        url: url_dicionario
                     },
                     function(resposta) {
                         if (resposta.sucesso) {
@@ -368,10 +370,12 @@ function carregarResources(package_id, painel, url) {
 // sempre que o conteúdo do campo de busca mudar, filtra os packages
 input_busca_package.on("input", function() {
     const busca = $(this).val().toLowerCase();
+
     // salva os packages filtrados
     const packages_filtrados = packages_carregados.filter(function(package_id) {
         return package_id.toLowerCase().includes(busca);
     });
+
     // montar os accordions com os packages filtrados
     montarAccordion(packages_filtrados, url);
 });
@@ -397,6 +401,7 @@ $("#formulario").on("submit", function(event) {
     // para cada resource selecionado, pegar os dados necessários e adicionar na lista resources em "dados"
     $("#lista-package-resource input[name='resources[]']:checked").each(function() {
         const checkbox = $(this);
+
         dados.resources.push({
             resource_id: checkbox.val(),
             package_id: checkbox.data("package-id"),
@@ -425,6 +430,7 @@ $("#formulario").on("submit", function(event) {
         // mostra o resultado do criar bases e fontes ou atualizar bases e fontes
         function(resposta) {
             console.log(resposta);
+
             if (resposta.success) {
                 if (acao === "atualizarBaseFontes") {
                     alert("Base e fontes atualizadas com sucesso!");
