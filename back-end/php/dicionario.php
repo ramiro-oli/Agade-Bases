@@ -35,11 +35,8 @@ function baixarArquivo(string $url): string
         CURLOPT_TIMEOUT => 60,
         CURLOPT_PROTOCOLS => CURLPROTO_HTTPS,
         CURLOPT_REDIR_PROTOCOLS => CURLPROTO_HTTPS,
-
-        // Temporário para testes.
-        // Reative a validação SSL antes de colocar em produção.
-        CURLOPT_SSL_VERIFYPEER => false,
-        CURLOPT_SSL_VERIFYHOST => 0
+        CURLOPT_SSL_VERIFYPEER => true,
+        CURLOPT_SSL_VERIFYHOST => 2
     ]);
 
     $conteudo = curl_exec($curl);
